@@ -5,114 +5,294 @@
  * @format
  */
 
-import React from 'react';
-import type {PropsWithChildren} from 'react';
+import React, {useEffect, useRef, useState} from 'react';
 import {
+  Button,
+  Dimensions,
   SafeAreaView,
-  ScrollView,
   StatusBar,
   StyleSheet,
   Text,
-  useColorScheme,
   View,
 } from 'react-native';
 
 import {
-  Colors,
-  DebugInstructions,
-  Header,
-  LearnMoreLinks,
-  ReloadInstructions,
-} from 'react-native/Libraries/NewAppScreen';
+  ScreenCapturePickerView,
+  RTCPeerConnection,
+  RTCIceCandidate,
+  RTCSessionDescription,
+  RTCView,
+  MediaStream,
+  MediaStreamTrack,
+  mediaDevices,
+  registerGlobals,
+} from 'react-native-webrtc';
+import ButtonElement from './components/ButtonElement';
+import GettingCall from './components/GettingCall';
+import VideoElement from './components/VideoElement';
+import WebRTC from './utils/rtc';
+import firestore from '@react-native-firebase/firestore';
 
-type SectionProps = PropsWithChildren<{
-  title: string;
-}>;
+let peerConstraints = {
+  iceServers: [
+    {
+      // urls: 'stun:stun.l.google.com:19302',
+      urls: ['stun:stun1.l.google.com:19302', 'stun:stun2.l.google.com:19302'],
+    },
+  ],
+};
 
-function Section({children, title}: SectionProps): React.JSX.Element {
-  const isDarkMode = useColorScheme() === 'dark';
-  return (
-    <View style={styles.sectionContainer}>
-      <Text
-        style={[
-          styles.sectionTitle,
-          {
-            color: isDarkMode ? Colors.white : Colors.black,
-          },
-        ]}>
-        {title}
-      </Text>
-      <Text
-        style={[
-          styles.sectionDescription,
-          {
-            color: isDarkMode ? Colors.light : Colors.dark,
-          },
-        ]}>
-        {children}
-      </Text>
-    </View>
+const App = () => {
+  const [localStream, setLocalStream] = useState<MediaStream | any>(null);
+  const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
+  const peerConnection = useRef<RTCPeerConnection>(
+    new RTCPeerConnection(peerConstraints),
   );
-}
 
-function App(): React.JSX.Element {
-  const isDarkMode = useColorScheme() === 'dark';
+  useEffect(() => {
+    initWebRTC();
+  }, []);
 
-  const backgroundStyle = {
-    backgroundColor: isDarkMode ? Colors.darker : Colors.lighter,
+  const initWebRTC = async () => {
+    // Set local and remote streams:
+    const l_stream = await mediaDevices.getUserMedia({
+      audio: true,
+      video: true,
+    });
+    setLocalStream(l_stream);
+
+    const r_stream = new MediaStream();
+    setRemoteStream(r_stream);
   };
 
+  const settingOffer = async () => {
+    // Push tracks from local stream to peer connection
+    await localStream.getTracks().forEach((track: any) => {
+      peerConnection.current.addTrack(track, localStream);
+    });
+
+    // Pull tracks from remote stream & add to video stream
+    // @ts-ignore:
+    await peerConnection.current.addEventListener('track', event => {
+      console.log('track', event);
+      event.streams[0].getTracks().forEach((track: any) => {
+        remoteStream?.addTrack(track);
+      });
+    });
+  };
+
+  const createOffer = async () => {
+    const callDoc = await firestore().collection('calls').doc();
+    console.log(callDoc.id);
+  };
+  // const peerConnection = new RTCPeerConnection(peerConstraints);
+
+  // useEffect(() => {
+  //   start();
+  // }, []);
+  // const [gettingCall, setGettingCall] = useState(false);
+  // const pc = useRef<RTCPeerConnection>();
+  // const connecting = useRef(false);
+
+  // const setupWebRTC = async () => {
+  //   pc.current = new RTCPeerConnection(peerConstraints);
+
+  //   const stream = await WebRTC.getStream();
+
+  //   if (stream) {
+  //     setLocalStream(stream);
+  //     stream.getTracks().forEach(track => {
+  //       console.log(track, 'track');
+  //       pc.current?.addTrack(track);
+  //     });
+  //   }
+  // };
+
+  // const start = async () => {
+  //   const stream = await mediaDevices.getUserMedia({
+  //     audio: true,
+  //     video: {
+  //       // video: 640,
+  //       // height: 480,
+  //       frameRate: 30,
+  //       facingMode: 'user' /* 'environment' */,
+  //       // deviceId: videoSourceId,
+  //     },
+  //   });
+  //   await setLocalStream(stream);
+  //   // await createOffer();
+  // };
+
+  // const createOffer = async () => {
+  //   peerConnection.current = new RTCPeerConnection(peerConstraints);
+
+  //   const testRemote = new MediaStream();
+  //   await setRemoteStream(testRemote);
+
+  //   // @ts-ignore:
+  //   await localStream.getTracks().forEach(track => {
+  //     peerConnection.current?.addTrack(track, localStream);
+  //   });
+
+  //   // @ts-ignore:
+  //   await peerConnection.current.addEventListener(
+  //     'connectionstatechange',
+  //     // @ts-ignore:
+  //     event => {
+  //       console.log(event, '1');
+  //     },
+  //   );
+  //   // @ts-ignore:
+  //   await peerConnection.current.addEventListener(
+  //     'icecandidate',
+  //     // @ts-ignore:
+  //     async event => {
+  //       if (event.candidate) {
+  //         console.log('new ice candidate', event.candidate);
+  //       }
+  //     },
+  //   );
+  //   // @ts-ignore:
+  //   await peerConnection.current.addEventListener(
+  //     'icecandidateerror',
+  //     // @ts-ignore:
+  //     event => {
+  //       console.log(event, '2');
+  //     },
+  //   );
+  //   // @ts-ignore:
+  //   await peerConnection.current.addEventListener(
+  //     'iceconnectionstatechange',
+  //     // @ts-ignore:
+  //     event => {
+  //       console.log(event, '3');
+  //     },
+  //   );
+  //   // @ts-ignore:
+  //   await peerConnection.current.addEventListener(
+  //     'icegatheringstatechange',
+  //     // @ts-ignore:
+  //     event => {
+  //       console.log(event, '4');
+  //     },
+  //   );
+
+  //   // @ts-ignore:
+  //   await peerConnection.current.addEventListener(
+  //     'negotiationneeded',
+  //     // @ts-ignore:
+  //     event => {
+  //       console.log(event, '5');
+  //     },
+  //   );
+  //   // @ts-ignore:
+  //   await peerConnection.current.addEventListener(
+  //     'signalingstatechange',
+  //     // @ts-ignore:
+  //     event => {
+  //       console.log(event, '6');
+  //     },
+  //   );
+  //   // @ts-ignore:
+  //   await peerConnection.current.addEventListener('track', event => {
+  //     console.log('track', event);
+
+  //     // @ts-ignore:
+  //     event.streams[0].getTracks().forEach(track => {
+  //       // @ts-ignore:
+  //       remoteStream?.addTrack();
+  //     });
+  //   });
+
+  //   let offer = await peerConnection.current.createOffer({});
+  //   await peerConnection.current.setLocalDescription(offer);
+
+  //   console.log(offer, 'offer');
+  // };
+
+  // const end = async () => {
+  //   if (localStream) {
+  //     localStream.release();
+  //     setLocalStream(null);
+  //     remoteStream?.release();
+  //     setRemoteStream(null);
+  //   }
+  // };
+
   return (
-    <SafeAreaView style={backgroundStyle}>
-      <StatusBar
-        barStyle={isDarkMode ? 'light-content' : 'dark-content'}
-        backgroundColor={backgroundStyle.backgroundColor}
-      />
-      <ScrollView
-        contentInsetAdjustmentBehavior="automatic"
-        style={backgroundStyle}>
-        <Header />
-        <View
-          style={{
-            backgroundColor: isDarkMode ? Colors.black : Colors.white,
-          }}>
-          <Section title="Step One">
-            Edit <Text style={styles.highlight}>App.tsx</Text> to change this
-            screen and then come back to see your edits.
-          </Section>
-          <Section title="See Your Changes">
-            <ReloadInstructions />
-          </Section>
-          <Section title="Debug">
-            <DebugInstructions />
-          </Section>
-          <Section title="Learn More">
-            Read the docs to discover what to do next:
-          </Section>
-          <LearnMoreLinks />
-        </View>
-      </ScrollView>
+    <SafeAreaView style={styles.screen}>
+      {localStream && (
+        <RTCView streamURL={localStream.toURL()} style={styles.video} />
+      )}
+      {remoteStream && (
+        <RTCView streamURL={remoteStream.toURL()} style={styles.video} />
+      )}
+      <View style={styles.controller}>
+        <ButtonElement
+          title={'V'}
+          onPress={settingOffer}
+          backgroundColor={'green'}
+        />
+        <ButtonElement
+          title={'X'}
+          onPress={createOffer}
+          backgroundColor={'red'}
+        />
+      </View>
     </SafeAreaView>
   );
-}
+};
 
 const styles = StyleSheet.create({
-  sectionContainer: {
-    marginTop: 32,
-    paddingHorizontal: 24,
+  screen: {
+    flex: 1,
+    // justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'white',
   },
-  sectionTitle: {
-    fontSize: 24,
-    fontWeight: '600',
+  video: {
+    // position: 'absolute',
+    width: Dimensions.get('window').width,
+    height: Dimensions.get('window').height * 0.3,
+    margin: 1,
+    backgroundColor: 'red',
   },
-  sectionDescription: {
-    marginTop: 8,
-    fontSize: 18,
-    fontWeight: '400',
-  },
-  highlight: {
-    fontWeight: '700',
+  controller: {
+    flexDirection: 'row',
+    position: 'absolute',
+    bottom: 20,
   },
 });
 
 export default App;
+
+/*
+stream: 
+{
+    "_id": "539ad16d-3e2f-4b6c-9674-955f4ae9486d",
+    "_reactTag": "539ad16d-3e2f-4b6c-9674-955f4ae9486d",
+    "_tracks": [{
+        "_constraints": [Object],
+        "_enabled": true,
+        "_muted": false,
+        "_peerConnectionId": undefined,
+        "_readyState": "live",
+        "_settings": [Object],
+        "id": "5a10c948-09bf-4f60-b9a5-27020e2d0a42",
+        "kind": "audio",
+        "label": "",
+        "remote": false
+    }, {
+        "_constraints": [Object],
+        "_enabled": true,
+        "_muted": false,
+        "_peerConnectionId": undefined,
+        "_readyState": "live",
+        "_settings": [Object],
+        "id": "dc6149b3-4f34-457f-babb-032dd33a45b6",
+        "kind": "video",
+        "label": "",
+        "remote": false
+    }]
+}
+*/
