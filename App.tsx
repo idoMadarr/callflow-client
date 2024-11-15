@@ -1,298 +1,568 @@
-/**
- * Sample React Native App
- * https://github.com/facebook/react-native
- *
- * @format
- */
-
-import React, {useEffect, useRef, useState} from 'react';
+import React, {useEffect, useState, useRef} from 'react';
 import {
-  Button,
-  Dimensions,
-  SafeAreaView,
-  StatusBar,
-  StyleSheet,
-  Text,
+  Platform,
+  KeyboardAvoidingView,
+  TouchableWithoutFeedback,
+  Keyboard,
   View,
+  Text,
+  TouchableOpacity,
 } from 'react-native';
-
+import SocketIOClient from 'socket.io-client';
 import {
-  ScreenCapturePickerView,
+  mediaDevices,
   RTCPeerConnection,
+  RTCView,
   RTCIceCandidate,
   RTCSessionDescription,
-  RTCView,
   MediaStream,
-  MediaStreamTrack,
-  mediaDevices,
-  registerGlobals,
 } from 'react-native-webrtc';
-import ButtonElement from './components/ButtonElement';
-import GettingCall from './components/GettingCall';
-import VideoElement from './components/VideoElement';
-import WebRTC from './utils/rtc';
-import firestore from '@react-native-firebase/firestore';
+import TextInputContainer from './components/TextInputContainer';
+import CallAnswer from './components/CallAnswer';
+import CallEnd from './components/EndCall';
+import MicOn from './components/MicOn';
+import MicOff from './components/MicOff';
+import VideoOn from './components/VideoOn';
+import VideoOff from './components/VideoOff';
+import CameraSwitch from './components/CameraSwitch';
+import IconContainer from './components/IconContainer';
+
+interface SourceStreamType {
+  deviceId: string;
+  facing: string;
+  groupId: string;
+  kind: string;
+  label: string;
+}
 
 let peerConstraints = {
   iceServers: [
     {
-      // urls: 'stun:stun.l.google.com:19302',
-      urls: ['stun:stun1.l.google.com:19302', 'stun:stun2.l.google.com:19302'],
+      urls: 'stun:stun.l.google.com:19302',
+    },
+    {
+      urls: 'stun:stun1.l.google.com:19302',
+    },
+    {
+      urls: 'stun:stun2.l.google.com:19302',
     },
   ],
 };
 
-const App = () => {
-  const [localStream, setLocalStream] = useState<MediaStream | any>(null);
+export default function App({}) {
+  const [type, setType] = useState('JOIN');
+
+  const otherUserId = useRef(null);
+
+  const [localStream, setlocalStream] = useState<MediaStream | null>(null);
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
-  const peerConnection = useRef<RTCPeerConnection>(
-    new RTCPeerConnection(peerConstraints),
+  let remoteRTCMessage = useRef(null);
+  const [localMicOn, setlocalMicOn] = useState(true);
+  const [localWebcamOn, setlocalWebcamOn] = useState(true);
+
+  const [callerId] = useState(
+    Math.floor(100000 + Math.random() * 900000).toString(),
+  );
+
+  const socket = SocketIOClient('http://10.0.2.2:8000', {
+    transports: ['websocket'],
+    query: {callerId},
+  });
+
+  const peerConnection = useRef(
+    new RTCPeerConnection({
+      iceServers: [
+        {
+          urls: 'stun:stun.l.google.com:19302',
+        },
+        {
+          urls: 'stun:stun1.l.google.com:19302',
+        },
+        {
+          urls: 'stun:stun2.l.google.com:19302',
+        },
+      ],
+    }),
   );
 
   useEffect(() => {
-    initWebRTC();
+    socket.on('newCall', data => {
+      //   This event occurs whenever any peer wishes to establish a call with you.
+      remoteRTCMessage.current = data.rtcMessage;
+      otherUserId.current = data.callerId;
+      setType('INCOMING_CALL');
+    });
+
+    socket.on('callAnswered', data => {
+      //   This event occurs whenever remote peer accept the call.
+      remoteRTCMessage.current = data.rtcMessage;
+      peerConnection.current.setRemoteDescription(
+        new RTCSessionDescription(remoteRTCMessage.current!),
+      );
+      setType('WEBRTC_ROOM');
+    });
+
+    socket.on('ICEcandidate', data => {
+      //  This event is for exchangin Candidates.
+      let message = data.rtcMessage;
+      if (peerConnection.current) {
+        peerConnection?.current
+          .addIceCandidate(new RTCIceCandidate(message.candidate))
+          .then(data => {
+            console.log('SUCCESS');
+          })
+          .catch(err => {
+            console.log('Error', err);
+          });
+      }
+    });
+
+    let isFront = false;
+
+    mediaDevices.enumerateDevices().then((sourceInfos: any) => {
+      let videoSourceId;
+      for (let i = 0; i < sourceInfos.length; i++) {
+        const sourceInfo = sourceInfos[i];
+        if (
+          sourceInfo.kind == 'videoinput' &&
+          sourceInfo.facing == (isFront ? 'user' : 'environment')
+        ) {
+          console.log(sourceInfo, 'sourceInfo');
+
+          videoSourceId = sourceInfo.deviceId;
+        }
+      }
+
+      mediaDevices
+        .getUserMedia({
+          audio: true,
+          video: {
+            mandatory: {
+              minWidth: 500, // Provide your own width, height and frame rate here
+              minHeight: 300,
+              minFrameRate: 30,
+            },
+            facingMode: isFront ? 'user' : 'environment',
+            optional: videoSourceId ? [{sourceId: videoSourceId}] : [],
+          },
+        })
+        .then(stream => {
+          // Get local stream!
+          // setup stream listening
+          console.log(stream, 'LOCAL STREAM');
+          setlocalStream(stream);
+          peerConnection.current.addStream(stream);
+          //   stream.getTracks().forEach(track => {
+          //     peerConnection.current.addTrack(track, stream);
+          //   });
+        })
+        .catch(error => {
+          console.log(error, 'error');
+        });
+    });
+
+    peerConnection.current.onaddstream = event => {
+      setRemoteStream(event.stream);
+    };
+
+    // Setup ice handling
+    peerConnection.current.onicecandidate = event => {
+      if (event.candidate) {
+        // Alice sends serialized candidate data to Bob using Socket
+        sendICEcandidate({
+          calleeId: otherUserId.current,
+          rtcMessage: {
+            label: event.candidate.sdpMLineIndex,
+            id: event.candidate.sdpMid,
+            candidate: event.candidate.candidate,
+          },
+        });
+      } else {
+        console.log('End of candidates.');
+      }
+    };
+
+    return () => {
+      socket.off('newCall');
+      socket.off('callAnswered');
+      socket.off('ICEcandidate');
+    };
   }, []);
 
-  const initWebRTC = async () => {
-    // Set local and remote streams:
-    const l_stream = await mediaDevices.getUserMedia({
-      audio: true,
-      video: true,
+  // Switch Camera
+  function switchCamera() {
+    localStream!.getVideoTracks().forEach(track => {
+      track._switchCamera();
     });
-    setLocalStream(l_stream);
+  }
 
-    const r_stream = new MediaStream();
-    setRemoteStream(r_stream);
-  };
-
-  const settingOffer = async () => {
-    // Push tracks from local stream to peer connection
-    await localStream.getTracks().forEach((track: any) => {
-      peerConnection.current.addTrack(track, localStream);
+  // Enable/Disable Camera
+  function toggleCamera() {
+    localWebcamOn ? setlocalWebcamOn(false) : setlocalWebcamOn(true);
+    localStream!.getVideoTracks().forEach(track => {
+      localWebcamOn ? (track.enabled = false) : (track.enabled = true);
     });
+  }
 
-    // Pull tracks from remote stream & add to video stream
-    // @ts-ignore:
-    await peerConnection.current.addEventListener('track', event => {
-      console.log('track', event);
-      event.streams[0].getTracks().forEach((track: any) => {
-        remoteStream?.addTrack(track);
-      });
+  // Enable/Disable Mic
+  function toggleMic() {
+    localMicOn ? setlocalMicOn(false) : setlocalMicOn(true);
+    localStream!.getAudioTracks().forEach(track => {
+      localMicOn ? (track.enabled = false) : (track.enabled = true);
     });
-  };
+  }
 
-  const createOffer = async () => {
-    const callDoc = await firestore().collection('calls').doc();
-    console.log(callDoc.id);
-  };
-  // const peerConnection = new RTCPeerConnection(peerConstraints);
+  // Destroy WebRTC Connection
+  function leave() {
+    peerConnection.current.close();
+    setlocalStream(null);
+    setType('JOIN');
+  }
 
-  // useEffect(() => {
-  //   start();
-  // }, []);
-  // const [gettingCall, setGettingCall] = useState(false);
-  // const pc = useRef<RTCPeerConnection>();
-  // const connecting = useRef(false);
+  async function processCall() {
+    // 1. Alice runs the `createOffer` method for getting SDP.
+    const sessionDescription = await peerConnection.current.createOffer();
 
-  // const setupWebRTC = async () => {
-  //   pc.current = new RTCPeerConnection(peerConstraints);
+    // 2. Alice sets the local description using `setLocalDescription`.
+    await peerConnection.current.setLocalDescription(sessionDescription);
 
-  //   const stream = await WebRTC.getStream();
+    // 3. Send this session description to Bob uisng socket
+    sendCall({
+      calleeId: otherUserId.current,
+      rtcMessage: sessionDescription,
+    });
+  }
 
-  //   if (stream) {
-  //     setLocalStream(stream);
-  //     stream.getTracks().forEach(track => {
-  //       console.log(track, 'track');
-  //       pc.current?.addTrack(track);
-  //     });
-  //   }
-  // };
+  async function processAccept() {
+    // 4. Bob sets the description, Alice sent him as the remote description using `setRemoteDescription()`
+    peerConnection.current.setRemoteDescription(
+      new RTCSessionDescription(remoteRTCMessage.current!),
+    );
 
-  // const start = async () => {
-  //   const stream = await mediaDevices.getUserMedia({
-  //     audio: true,
-  //     video: {
-  //       // video: 640,
-  //       // height: 480,
-  //       frameRate: 30,
-  //       facingMode: 'user' /* 'environment' */,
-  //       // deviceId: videoSourceId,
-  //     },
-  //   });
-  //   await setLocalStream(stream);
-  //   // await createOffer();
-  // };
+    // 5. Bob runs the `createAnswer` method
+    const sessionDescription = await peerConnection.current.createAnswer();
 
-  // const createOffer = async () => {
-  //   peerConnection.current = new RTCPeerConnection(peerConstraints);
+    // 6. Bob sets that as the local description and sends it to Alice
+    await peerConnection.current.setLocalDescription(sessionDescription);
+    answerCall({
+      callerId: otherUserId.current,
+      rtcMessage: sessionDescription,
+    });
+  }
 
-  //   const testRemote = new MediaStream();
-  //   await setRemoteStream(testRemote);
+  function answerCall(data: any) {
+    socket.emit('answerCall', data);
+  }
 
-  //   // @ts-ignore:
-  //   await localStream.getTracks().forEach(track => {
-  //     peerConnection.current?.addTrack(track, localStream);
-  //   });
+  function sendCall(data: any) {
+    socket.emit('call', data);
+  }
 
-  //   // @ts-ignore:
-  //   await peerConnection.current.addEventListener(
-  //     'connectionstatechange',
-  //     // @ts-ignore:
-  //     event => {
-  //       console.log(event, '1');
-  //     },
-  //   );
-  //   // @ts-ignore:
-  //   await peerConnection.current.addEventListener(
-  //     'icecandidate',
-  //     // @ts-ignore:
-  //     async event => {
-  //       if (event.candidate) {
-  //         console.log('new ice candidate', event.candidate);
-  //       }
-  //     },
-  //   );
-  //   // @ts-ignore:
-  //   await peerConnection.current.addEventListener(
-  //     'icecandidateerror',
-  //     // @ts-ignore:
-  //     event => {
-  //       console.log(event, '2');
-  //     },
-  //   );
-  //   // @ts-ignore:
-  //   await peerConnection.current.addEventListener(
-  //     'iceconnectionstatechange',
-  //     // @ts-ignore:
-  //     event => {
-  //       console.log(event, '3');
-  //     },
-  //   );
-  //   // @ts-ignore:
-  //   await peerConnection.current.addEventListener(
-  //     'icegatheringstatechange',
-  //     // @ts-ignore:
-  //     event => {
-  //       console.log(event, '4');
-  //     },
-  //   );
-
-  //   // @ts-ignore:
-  //   await peerConnection.current.addEventListener(
-  //     'negotiationneeded',
-  //     // @ts-ignore:
-  //     event => {
-  //       console.log(event, '5');
-  //     },
-  //   );
-  //   // @ts-ignore:
-  //   await peerConnection.current.addEventListener(
-  //     'signalingstatechange',
-  //     // @ts-ignore:
-  //     event => {
-  //       console.log(event, '6');
-  //     },
-  //   );
-  //   // @ts-ignore:
-  //   await peerConnection.current.addEventListener('track', event => {
-  //     console.log('track', event);
-
-  //     // @ts-ignore:
-  //     event.streams[0].getTracks().forEach(track => {
-  //       // @ts-ignore:
-  //       remoteStream?.addTrack();
-  //     });
-  //   });
-
-  //   let offer = await peerConnection.current.createOffer({});
-  //   await peerConnection.current.setLocalDescription(offer);
-
-  //   console.log(offer, 'offer');
-  // };
-
-  // const end = async () => {
-  //   if (localStream) {
-  //     localStream.release();
-  //     setLocalStream(null);
-  //     remoteStream?.release();
-  //     setRemoteStream(null);
-  //   }
-  // };
-
-  return (
-    <SafeAreaView style={styles.screen}>
-      {localStream && (
-        <RTCView streamURL={localStream.toURL()} style={styles.video} />
-      )}
-      {remoteStream && (
-        <RTCView streamURL={remoteStream.toURL()} style={styles.video} />
-      )}
-      <View style={styles.controller}>
-        <ButtonElement
-          title={'V'}
-          onPress={settingOffer}
-          backgroundColor={'green'}
-        />
-        <ButtonElement
-          title={'X'}
-          onPress={createOffer}
-          backgroundColor={'red'}
-        />
+  const WebrtcRoomScreen = () => {
+    return (
+      <View
+        style={{
+          flex: 1,
+          backgroundColor: '#050A0E',
+          paddingHorizontal: 12,
+          paddingVertical: 12,
+        }}>
+        {localStream ? (
+          <RTCView
+            objectFit={'cover'}
+            style={{flex: 1, backgroundColor: '#050A0E'}}
+            streamURL={localStream.toURL()}
+          />
+        ) : null}
+        {remoteStream ? (
+          <RTCView
+            objectFit={'cover'}
+            style={{
+              flex: 1,
+              backgroundColor: '#050A0E',
+              marginTop: 8,
+            }}
+            streamURL={remoteStream.toURL()}
+          />
+        ) : null}
+        <View
+          style={{
+            marginVertical: 12,
+            flexDirection: 'row',
+            justifyContent: 'space-evenly',
+          }}>
+          <IconContainer
+            backgroundColor={'red'}
+            onPress={() => {
+              leave();
+              setlocalStream(null);
+            }}
+            Icon={() => {
+              return <CallEnd height={26} width={26} fill="#FFF" />;
+            }}
+          />
+          <IconContainer
+            style={{
+              borderWidth: 1.5,
+              borderColor: '#2B3034',
+            }}
+            backgroundColor={!localMicOn ? '#fff' : 'transparent'}
+            onPress={() => {
+              toggleMic();
+            }}
+            Icon={() => {
+              return localMicOn ? (
+                <MicOn height={24} width={24} fill="#FFF" />
+              ) : (
+                <MicOff height={28} width={28} fill="#1D2939" />
+              );
+            }}
+          />
+          <IconContainer
+            style={{
+              borderWidth: 1.5,
+              borderColor: '#2B3034',
+            }}
+            backgroundColor={!localWebcamOn ? '#fff' : 'transparent'}
+            onPress={() => {
+              toggleCamera();
+            }}
+            Icon={() => {
+              return localWebcamOn ? (
+                <VideoOn height={24} width={24} fill="#FFF" />
+              ) : (
+                <VideoOff height={36} width={36} fill="#1D2939" />
+              );
+            }}
+          />
+          <IconContainer
+            style={{
+              borderWidth: 1.5,
+              borderColor: '#2B3034',
+            }}
+            backgroundColor={'transparent'}
+            onPress={() => {
+              switchCamera();
+            }}
+            Icon={() => {
+              return <CameraSwitch height={24} width={24} fill="#FFF" />;
+            }}
+          />
+        </View>
       </View>
-    </SafeAreaView>
-  );
-};
+    );
+  };
 
-const styles = StyleSheet.create({
-  screen: {
-    flex: 1,
-    // justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: 'white',
-  },
-  video: {
-    // position: 'absolute',
-    width: Dimensions.get('window').width,
-    height: Dimensions.get('window').height * 0.3,
-    margin: 1,
-    backgroundColor: 'red',
-  },
-  controller: {
-    flexDirection: 'row',
-    position: 'absolute',
-    bottom: 20,
-  },
-});
+  const JoinScreen = () => {
+    return (
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        style={{
+          flex: 1,
+          backgroundColor: '#050A0E',
+          justifyContent: 'center',
+          paddingHorizontal: 42,
+        }}>
+        <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
+          <>
+            <View
+              style={{
+                padding: 35,
+                backgroundColor: '#1A1C22',
+                justifyContent: 'center',
+                alignItems: 'center',
+                borderRadius: 14,
+              }}>
+              <Text
+                style={{
+                  fontSize: 18,
+                  color: '#D0D4DD',
+                }}>
+                Your Caller ID
+              </Text>
+              <View
+                style={{
+                  flexDirection: 'row',
+                  marginTop: 12,
+                  alignItems: 'center',
+                }}>
+                <Text
+                  style={{
+                    fontSize: 32,
+                    color: '#ffff',
+                    letterSpacing: 6,
+                  }}>
+                  {callerId}
+                </Text>
+              </View>
+            </View>
 
-export default App;
+            <View
+              style={{
+                backgroundColor: '#1A1C22',
+                padding: 40,
+                marginTop: 25,
+                justifyContent: 'center',
+                borderRadius: 14,
+              }}>
+              <Text
+                style={{
+                  fontSize: 18,
+                  color: '#D0D4DD',
+                }}>
+                Enter call id of another user
+              </Text>
+              <TextInputContainer
+                placeholder={'Enter Caller ID'}
+                value={otherUserId.current}
+                setValue={(text: any) => {
+                  otherUserId.current = text;
+                }}
+                keyboardType={'number-pad'}
+              />
+              <TouchableOpacity
+                onPress={() => {
+                  processCall();
+                  setType('OUTGOING_CALL');
+                }}
+                style={{
+                  height: 50,
+                  backgroundColor: '#5568FE',
+                  justifyContent: 'center',
+                  alignItems: 'center',
+                  borderRadius: 12,
+                  marginTop: 16,
+                }}>
+                <Text
+                  style={{
+                    fontSize: 16,
+                    color: '#FFFFFF',
+                  }}>
+                  Call Now
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </>
+        </TouchableWithoutFeedback>
+      </KeyboardAvoidingView>
+    );
+  };
 
-/*
-stream: 
-{
-    "_id": "539ad16d-3e2f-4b6c-9674-955f4ae9486d",
-    "_reactTag": "539ad16d-3e2f-4b6c-9674-955f4ae9486d",
-    "_tracks": [{
-        "_constraints": [Object],
-        "_enabled": true,
-        "_muted": false,
-        "_peerConnectionId": undefined,
-        "_readyState": "live",
-        "_settings": [Object],
-        "id": "5a10c948-09bf-4f60-b9a5-27020e2d0a42",
-        "kind": "audio",
-        "label": "",
-        "remote": false
-    }, {
-        "_constraints": [Object],
-        "_enabled": true,
-        "_muted": false,
-        "_peerConnectionId": undefined,
-        "_readyState": "live",
-        "_settings": [Object],
-        "id": "dc6149b3-4f34-457f-babb-032dd33a45b6",
-        "kind": "video",
-        "label": "",
-        "remote": false
-    }]
+  const OutgoingCallScreen = () => {
+    return (
+      <View
+        style={{
+          flex: 1,
+          justifyContent: 'space-around',
+          backgroundColor: '#050A0E',
+        }}>
+        <View
+          style={{
+            padding: 35,
+            justifyContent: 'center',
+            alignItems: 'center',
+            borderRadius: 14,
+          }}>
+          <Text
+            style={{
+              fontSize: 16,
+              color: '#D0D4DD',
+            }}>
+            Calling to...
+          </Text>
+
+          <Text
+            style={{
+              fontSize: 36,
+              marginTop: 12,
+              color: '#ffff',
+              letterSpacing: 6,
+            }}>
+            {otherUserId.current}
+          </Text>
+        </View>
+        <View
+          style={{
+            justifyContent: 'center',
+            alignItems: 'center',
+          }}>
+          <TouchableOpacity
+            onPress={() => {
+              setType('JOIN');
+              otherUserId.current = null;
+            }}
+            style={{
+              backgroundColor: '#FF5D5D',
+              borderRadius: 30,
+              height: 60,
+              aspectRatio: 1,
+              justifyContent: 'center',
+              alignItems: 'center',
+            }}>
+            <CallEnd width={50} height={12} />
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  };
+
+  const IncomingCallScreen = () => {
+    return (
+      <View
+        style={{
+          flex: 1,
+          justifyContent: 'space-around',
+          backgroundColor: '#050A0E',
+        }}>
+        <View
+          style={{
+            padding: 35,
+            justifyContent: 'center',
+            alignItems: 'center',
+            borderRadius: 14,
+          }}>
+          <Text
+            style={{
+              fontSize: 36,
+              marginTop: 12,
+              color: '#ffff',
+            }}>
+            {otherUserId.current} is calling..
+          </Text>
+        </View>
+        <View
+          style={{
+            justifyContent: 'center',
+            alignItems: 'center',
+          }}>
+          <TouchableOpacity
+            onPress={() => {
+              processAccept();
+              setType('WEBRTC_ROOM');
+            }}
+            style={{
+              backgroundColor: 'green',
+              borderRadius: 30,
+              height: 60,
+              aspectRatio: 1,
+              justifyContent: 'center',
+              alignItems: 'center',
+            }}>
+            <CallAnswer height={28} fill={'#fff'} />
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  };
+
+  switch (type) {
+    case 'JOIN':
+      return JoinScreen();
+    case 'INCOMING_CALL':
+      return IncomingCallScreen();
+    case 'OUTGOING_CALL':
+      return OutgoingCallScreen();
+    default:
+      return null;
+  }
 }
-*/
